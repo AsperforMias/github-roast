@@ -1,18 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPercentile, recordScore } from "@/lib/db";
 import { AccountNotFoundError, GitHubRateLimitError, collect } from "@/lib/github";
-import { beatPercent } from "@/lib/percentile";
 import { checkRateLimit, coalesceScan, getCachedScan } from "@/lib/redis";
 import { score } from "@/lib/score";
 import { verifyTurnstile } from "@/lib/turnstile";
 import type { ScanResult } from "@/lib/types";
-
-/** Compute the "you beat X%" payload for a result. Best-effort: null on any issue. */
-async function percentileFor(result: ScanResult): Promise<{ beat: number | null; total: number } | null> {
-  const counts = await getPercentile(result.scoring.final_score);
-  if (!counts) return null;
-  return { beat: beatPercent(counts.below, counts.total), total: counts.total };
-}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -53,12 +44,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "turnstile_failed" }, { status: 403 });
   }
 
-  // Cache hit short-circuits both GitHub and (later) the LLM. The row already
-  // exists from the first cold scan, so just refresh the (time-varying) percentile.
+  // Cache hit short-circuits both GitHub and (later) the LLM. The leaderboard
+  // row + percentile are produced by /api/roast (which has the AI-adjusted final
+  // score), so the scan response stays purely the deterministic result.
   const cached = await getCachedScan(username);
   if (cached) {
-    const percentile = await percentileFor(cached);
-    return NextResponse.json({ ...cached, cached: true, percentile });
+    return NextResponse.json({ ...cached, cached: true });
   }
 
   const { success } = await checkRateLimit(ip);
@@ -72,21 +63,7 @@ export async function POST(req: NextRequest) {
       const scoring = score(metrics);
       return { metrics, top_repos, recent_prs, scoring };
     });
-
-    // Persist for the leaderboard, then compute the fresh percentile (both
-    // best-effort — a DB outage must never break the scan itself).
-    await recordScore({
-      username: result.metrics.username,
-      display_name: result.metrics.name,
-      avatar_url: result.metrics.avatar_url,
-      profile_url: result.metrics.profile_url,
-      final_score: result.scoring.final_score,
-      tier: result.scoring.tier,
-      scanned_at: Date.now(),
-    });
-    const percentile = await percentileFor(result);
-
-    return NextResponse.json({ ...result, cached: false, percentile });
+    return NextResponse.json({ ...result, cached: false });
   } catch (e) {
     if (e instanceof AccountNotFoundError) {
       return NextResponse.json({ error: "account_not_found" }, { status: 404 });

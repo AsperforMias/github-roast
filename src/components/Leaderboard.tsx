@@ -84,8 +84,8 @@ export function Leaderboard() {
             <span className={`shrink-0 text-xs font-medium ${style.text}`}>
               {style.emoji} {e.tier}
             </span>
-            <span className={`w-12 shrink-0 text-right text-lg font-black tabular-nums ${style.text}`}>
-              {e.final_score}
+            <span className={`w-16 shrink-0 text-right text-lg font-black tabular-nums ${style.text}`}>
+              {e.final_score.toFixed(2)}
             </span>
           </li>
         );

@@ -96,3 +96,16 @@ export interface ScanResult {
   recent_prs: RecentPr[];
   scoring: Scoring;
 }
+
+/**
+ * Metadata the roast stream emits on its first line, after the AI applies its
+ * bounded ±10 qualitative adjustment. `final_score` is the deterministic score
+ * plus `delta` (clamped 0-100, 2 decimals) and is the authoritative final score.
+ */
+export interface RoastMeta {
+  final_score: number;
+  tier: Tier;
+  tier_label: string;
+  delta: number;
+  percentile: { beat: number | null; total: number } | null;
+}

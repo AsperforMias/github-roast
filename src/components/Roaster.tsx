@@ -4,13 +4,23 @@ import { useCallback, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { tierStyle } from "@/lib/tier";
-import type { ScanResult } from "@/lib/types";
+import type { RoastMeta, ScanResult, Tier } from "@/lib/types";
 import {
   ByoKeyConfig,
   ByoKeyModal,
   loadByoKey,
 } from "./ByoKeyModal";
+import { ShareCard } from "./ShareCard";
 import { Turnstile, turnstileEnabled } from "./Turnstile";
+
+const META_PREFIX = "META ";
+
+interface Display {
+  score: number;
+  tier: Tier;
+  tierLabel: string;
+  delta: number;
+}
 
 const SCAN_ERRORS: Record<string, string> = {
   invalid_username: "这不像个 GitHub 用户名，检查一下？",
@@ -35,6 +45,7 @@ export function Roaster() {
   const [percentile, setPercentile] = useState<{ beat: number | null; total: number } | null>(
     null,
   );
+  const [display, setDisplay] = useState<Display | null>(null);
   const reportRef = useRef<HTMLDivElement>(null);
 
   const runRoast = useCallback(async (scanResult: ScanResult) => {
@@ -68,11 +79,36 @@ export function Roaster() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let acc = "";
+      let bodyStart = -1; // index in `acc` where the markdown report begins
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         acc += decoder.decode(value, { stream: true });
-        setReport(acc);
+
+        // The first line is `META {json}` (AI-adjusted score + percentile).
+        if (bodyStart < 0) {
+          if (acc.startsWith(META_PREFIX)) {
+            const nl = acc.indexOf("\n");
+            if (nl >= 0) {
+              try {
+                const meta = JSON.parse(acc.slice(META_PREFIX.length, nl)) as RoastMeta;
+                setDisplay({
+                  score: meta.final_score,
+                  tier: meta.tier,
+                  tierLabel: meta.tier_label,
+                  delta: meta.delta,
+                });
+                setPercentile(meta.percentile);
+              } catch {
+                /* malformed meta — ignore, keep deterministic display */
+              }
+              bodyStart = nl + 1;
+            }
+          } else if (acc.length >= META_PREFIX.length) {
+            bodyStart = 0; // no meta line (e.g. a model that ignored the format)
+          }
+        }
+        if (bodyStart >= 0) setReport(acc.slice(bodyStart));
       }
     } catch {
       setError("网络中断，毒舌没说完。");
@@ -93,6 +129,7 @@ export function Roaster() {
       setScan(null);
       setReport("");
       setPercentile(null);
+      setDisplay(null);
       setScanning(true);
       try {
         const res = await fetch("/api/scan", {
@@ -108,9 +145,14 @@ export function Roaster() {
         }
         const result = data as ScanResult;
         setScan(result);
-        setPercentile(
-          (data as { percentile?: { beat: number | null; total: number } }).percentile ?? null,
-        );
+        // Show the deterministic score immediately; the roast's META line then
+        // updates it to the AI-adjusted final.
+        setDisplay({
+          score: result.scoring.final_score,
+          tier: result.scoring.tier,
+          tierLabel: result.scoring.tier_label,
+          delta: 0,
+        });
         setScanning(false);
         void runRoast(result);
         setTimeout(
@@ -127,9 +169,10 @@ export function Roaster() {
 
   const beatText =
     percentile && percentile.beat !== null ? `，超越了 ${percentile.beat}% 的开发者` : "";
-  const shareText = scan
-    ? `我的 GitHub 含金量被审判了：${scan.scoring.final_score}/100 · ${scan.scoring.tier}（${scan.scoring.tier_label}）${beatText}。来测测你的 👉`
-    : "";
+  const shareText =
+    scan && display
+      ? `我的 GitHub 含金量被审判了：${display.score.toFixed(2)}/100 · ${display.tier}（${display.tierLabel}）${beatText}。来测测你的 👉`
+      : "";
 
   const copyShare = async () => {
     try {
@@ -143,7 +186,26 @@ export function Roaster() {
     }
   };
 
-  const style = scan ? tierStyle(scan.scoring.tier) : null;
+  const style = display ? tierStyle(display.tier) : null;
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [savingImg, setSavingImg] = useState(false);
+
+  const saveImage = async () => {
+    if (!cardRef.current || savingImg) return;
+    setSavingImg(true);
+    try {
+      const { toPng } = await import("html-to-image");
+      const dataUrl = await toPng(cardRef.current, { pixelRatio: 2, cacheBust: true });
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = `github-roast-${scan?.metrics.username ?? "score"}.png`;
+      a.click();
+    } catch (e) {
+      console.error("save image failed:", e);
+    } finally {
+      setSavingImg(false);
+    }
+  };
 
   return (
     <div className="w-full max-w-2xl">
@@ -190,7 +252,7 @@ export function Roaster() {
       )}
 
       {/* Score reveal */}
-      {scan && style && (
+      {scan && display && style && (
         <div ref={reportRef} className="mt-10">
           <div
             className={`animate-pop mx-auto flex max-w-md flex-col items-center rounded-2xl border bg-white/[0.03] p-6 text-center ring-1 ${style.ring}`}
@@ -205,13 +267,22 @@ export function Roaster() {
               @{scan.metrics.username}
             </a>
             <div className={`mt-2 text-6xl font-black tabular-nums ${style.text}`}>
-              {scan.scoring.final_score}
+              {display.score.toFixed(2)}
               <span className="text-2xl text-zinc-600">/100</span>
             </div>
             <div className={`mt-1 text-2xl font-bold ${style.text}`}>
-              {style.emoji} {scan.scoring.tier}
+              {style.emoji} {display.tier}
             </div>
-            <div className="mt-1 text-sm text-zinc-400">{scan.scoring.tier_label}</div>
+            <div className="mt-1 text-sm text-zinc-400">{display.tierLabel}</div>
+
+            {display.delta !== 0 && (
+              <div className="mt-2 text-xs text-zinc-500">
+                脚本初评 {scan.scoring.final_score.toFixed(2)} · AI 人工复核{" "}
+                <span className={display.delta > 0 ? "text-emerald-400" : "text-rose-400"}>
+                  {display.delta > 0 ? `+${display.delta}` : display.delta}
+                </span>
+              </div>
+            )}
 
             {percentile &&
               (percentile.beat === null ? (
@@ -223,12 +294,21 @@ export function Roaster() {
                 </div>
               ))}
 
-            <button
-              onClick={copyShare}
-              className="mt-4 rounded-full border border-white/10 px-4 py-1.5 text-xs text-zinc-300 hover:bg-white/10"
-            >
-              {copied ? "已复制 ✓" : "复制分享文案"}
-            </button>
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              <button
+                onClick={copyShare}
+                className="rounded-full border border-white/10 px-4 py-1.5 text-xs text-zinc-300 hover:bg-white/10"
+              >
+                {copied ? "已复制 ✓" : "复制分享文案"}
+              </button>
+              <button
+                onClick={saveImage}
+                disabled={savingImg}
+                className="rounded-full bg-orange-600/90 px-4 py-1.5 text-xs font-medium text-white hover:bg-orange-500 disabled:opacity-50"
+              >
+                {savingImg ? "生成中…" : "📸 保存炫耀图"}
+              </button>
+            </div>
           </div>
 
           {/* Roast report */}
@@ -251,6 +331,20 @@ export function Roaster() {
               注：评分仅基于公开信号，私有贡献不计入，可能低估私有组织的活跃员工。
             </p>
           )}
+
+          {/* Off-screen export target for the flex image */}
+          <div className="pointer-events-none fixed -left-[9999px] top-0">
+            <ShareCard
+              ref={cardRef}
+              username={scan.metrics.username}
+              name={scan.metrics.name}
+              avatarUrl={scan.metrics.avatar_url}
+              score={display.score}
+              tier={display.tier}
+              tierLabel={display.tierLabel}
+              beat={percentile?.beat ?? null}
+            />
+          </div>
         </div>
       )}
 

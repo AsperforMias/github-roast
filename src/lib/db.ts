@@ -36,7 +36,7 @@ function ensureSchema(db: Client): Promise<void> {
              display_name TEXT,
              avatar_url   TEXT,
              profile_url  TEXT,
-             final_score  INTEGER NOT NULL,
+             final_score  REAL NOT NULL,
              tier         TEXT NOT NULL,
              hidden       INTEGER NOT NULL DEFAULT 0,
              scanned_at   INTEGER NOT NULL

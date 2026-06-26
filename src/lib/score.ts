@@ -35,6 +35,19 @@ export function logRatio(value: number, fullAt: number): number {
   return Math.min(Math.log10(value + 1) / Math.log10(fullAt + 1), 1.0);
 }
 
+/** Clamp a score to [0, 100] and round to 2 decimals. */
+export function clampScore(value: number): number {
+  return round(Math.max(0, Math.min(value, 100)), 2);
+}
+
+/** Map a final score to its tier label. Shared by the scorer and the AI-adjust step. */
+export function tierFor(final: number): { tier: Tier; tier_label: string } {
+  if (final >= 90) return { tier: "夯", tier_label: "顶级开发者 · 高价值高信任" };
+  if (final >= 70) return { tier: "人上人", tier_label: "优质贡献者 · 值得信任" };
+  if (final >= 40) return { tier: "NPC", tier_label: "普通账号 · 特征平庸存疑" };
+  return { tier: "拉完了", tier_label: "低价值 · 疑似刷量/AI 机器人" };
+}
+
 export function score(m: RawMetrics): Scoring {
   const sub: SubScores = {
     account_maturity: 0,
@@ -189,23 +202,9 @@ export function score(m: RawMetrics): Scoring {
     flags.reduce((a, f) => a + f.penalty, 0),
     40,
   );
-  const final = Math.max(0, Math.min(round(base - penalty), 100));
-
-  let tier: Tier;
-  let tierLabel: string;
-  if (final >= 90) {
-    tier = "夯";
-    tierLabel = "顶级开发者 · 高价值高信任";
-  } else if (final >= 70) {
-    tier = "人上人";
-    tierLabel = "优质贡献者 · 值得信任";
-  } else if (final >= 40) {
-    tier = "NPC";
-    tierLabel = "普通账号 · 特征平庸存疑";
-  } else {
-    tier = "拉完了";
-    tierLabel = "低价值 · 疑似刷量/AI 机器人";
-  }
+  // Keep two decimals (not integer) so the leaderboard can rank finely.
+  const final = clampScore(round(base - penalty, 2));
+  const { tier, tier_label: tierLabel } = tierFor(final);
 
   return {
     sub_scores: sub,
