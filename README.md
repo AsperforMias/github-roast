@@ -108,5 +108,3 @@ Licensed under **[GNU AGPL-3.0](./LICENSE)**.
 - The scoring core is ported from the open-source Claude skill `github-account-value`, kept as the single source of truth.
 
 > **Trademark:** the "GitHub Roast / 毒舌 GitHub 评分" name, logo, and domain are **not covered** by the open-source license; all rights reserved. You may self-host from this code, but please do not use the project's name/brand to impersonate the official site or cause confusion.
->
-> Need it for a commercial scenario where publishing source is impractical (closed-source derivative / commercial license)? Get in touch.
