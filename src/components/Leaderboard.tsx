@@ -112,8 +112,17 @@ export function Leaderboard({ pageSize }: { pageSize?: number }) {
           return (
             <li
               key={e.username}
-              className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3"
+              className="group relative flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 transition-colors hover:bg-white/[0.06]"
             >
+              {/* Stretched link: whole row navigates to the detail page. Kept as a
+                  real <a> so cmd/ctrl-click opens a new tab. Tag expand buttons sit
+                  above it (z-10) so they still toggle instead of navigating. */}
+              <Link
+                href={`/u/${e.username}`}
+                prefetch={false}
+                aria-label={`查看 @${e.username} 的评分详情`}
+                className="absolute inset-0 z-0 rounded-xl"
+              />
               <span className="w-8 shrink-0 text-center text-sm font-bold tabular-nums text-zinc-400">
                 {RANK_BADGE[rank] ?? rank + 1}
               </span>
@@ -129,18 +138,15 @@ export function Leaderboard({ pageSize }: { pageSize?: number }) {
             )}
             <div className="min-w-0 flex-1">
               <div className="truncate">
-                <Link
-                  href={`/u/${e.username}`}
-                  prefetch={false}
-                  className="font-medium hover:underline"
-                >
-                  @{e.username}
-                </Link>
+                <span className="font-medium group-hover:underline">@{e.username}</span>
                 {e.display_name && (
                   <span className="ml-1.5 text-sm text-zinc-500">{e.display_name}</span>
                 )}
               </div>
-              <TagRow tags={e.tags} />
+              {/* Above the stretched link so the +N / 收起 buttons toggle, not navigate. */}
+              <div className="relative z-10 w-fit">
+                <TagRow tags={e.tags} />
+              </div>
             </div>
             <span className={`shrink-0 text-xs font-medium ${style.text}`}>
               {style.emoji} {e.tier}
