@@ -1,93 +1,112 @@
-# 毒舌 GitHub 评分 · GitHub Roast 🔥
+# Savage GitHub Roast · 毒舌 GitHub 评分 🔥
 
-输入一个 GitHub 账号，30 秒得到一份 **0–100 分**的价值与信任评分、四档等级（🏆 夯 / 💪 人上人 / 🫥 NPC / 💀 拉完了），外加一句**扎在真实数据上的毒舌点评**。专治刷量号、AI 机器人、收藏夹开发者、自产自销自审自合的 PR farmer。
+> **Live:** [githubroast.dev](https://githubroast.dev)
 
-评分核心来自开源 Claude 技能 `github-account-value` —— 网站把它的 Python 打分逻辑 **逐行移植成 TypeScript**，并用单元测试锁定二者输出一致。
+Drop a GitHub handle and get, in 30 seconds, a **0–100 value & trust score**, a four-tier verdict (🏆 Legend / 💪 Solid / 🫥 NPC / 💀 Cooked), and one **brutally honest roast grounded in real data**. Built to expose star-farmers, AI bots, fork-hoarders, and self-merge PR farmers.
 
-## 工作原理
+The scoring core comes from the open-source Claude skill `github-account-value` — this site **ports its Python scoring logic line-by-line into TypeScript**, with unit tests locking the two outputs in parity.
+
+> 中文用户:输入 GitHub 账号即可得到 0–100 分的价值/信任评分 + 一句扎心毒舌点评。专治刷量号、AI 机器人、收藏夹开发者、自产自销自审自合的 PR farmer。
+
+## How it works
 
 ```
-浏览器 ─▶ /api/scan ─▶ [Redis 缓存?] ─▶ lib/github.ts  (GitHub REST + GraphQL, 运营方 PAT)
-                                   └─▶ lib/score.ts   (确定性打分, 与 Python 技能一致)
-                                   └─▶ 写入缓存 24h
-        ─▶ /api/roast (流式) ─▶ lib/llm.ts (OpenAI 兼容; 默认 StepFun 阶跃; 可自带 Key)
+browser ─▶ /api/scan ─▶ [Redis cache?] ─▶ lib/github.ts  (GitHub REST + GraphQL, operator PAT)
+                                     └─▶ lib/score.ts   (deterministic scoring, parity with the Python skill)
+                                     └─▶ write cache 24h
+         ─▶ /api/roast (streaming) ─▶ lib/llm.ts (OpenAI-compatible; defaults to StepFun; bring-your-own key)
 ```
 
-- **分数是确定性的**，由 `lib/score.ts` 在服务端算出 —— 大模型改不了数字。
-- 大模型只做两件事：读 README/PR 做**至多 ±10** 的定性修正，写那句毒舌点评。所以哪怕用免费小模型也不会算错分。
-- 6 个维度（账号成熟度 / 原创项目质量 / 贡献质量 / 外部生态贡献 / 社区影响力 / 活跃真实性）+ 10 条刷量 red flag，权重向**难以造假**的信号（合并进真实仓库的 PR、持续活跃）倾斜，对**可购买**的信号（star、粉丝）压低权重。
+- **The score is deterministic** — computed server-side by `lib/score.ts`. The LLM cannot change the number.
+- The LLM does only two things: read README/PRs to apply a bounded **±10** qualitative adjustment, and write the roast line. So even a free small model won't miscalculate the score.
+- 6 dimensions (account maturity / original project quality / contribution quality / ecosystem impact / community influence / activity authenticity) + 10 farming red flags. Weights lean toward **hard-to-fake** signals (PRs merged into real repos, sustained activity) and discount **buyable** ones (stars, followers).
 
-## 本地开发
+## Local development
 
 ```bash
 pnpm install
-cp .env.example .env.local   # 填入 GITHUB_TOKEN 和 LLM_API_KEY（默认 StepFun 阶跃）
+cp .env.example .env.local   # set GITHUB_TOKEN and LLM_API_KEY (defaults to StepFun)
 pnpm dev
 ```
 
-> **务必配置 `GITHUB_TOKEN`。** 没有 token 时，GitHub 的 GraphQL 贡献/活跃度/外部贡献等维度会全部归零（评分被严重低估），且 REST 限速只有 60/h。一个只读 PAT 即可把限速提到 5000/h 并解锁全部维度。
+> **Always set `GITHUB_TOKEN`.** Without a token, GitHub's GraphQL dimensions (contributions / activity / external contributions) all drop to zero (scores get badly underestimated), and REST is rate-limited to 60/h. A read-only PAT raises the limit to 5000/h and unlocks every dimension.
 
-### 命令
+### Commands
 
-| 命令 | 说明 |
+| Command | Description |
 |------|------|
-| `pnpm dev` | 本地开发 |
-| `pnpm build` / `pnpm start` | 生产构建 / 运行 |
-| `pnpm test` | Vitest 打分一致性测试（对照 Python 技能输出） |
+| `pnpm dev` | Local development |
+| `pnpm build` / `pnpm start` | Production build / run |
+| `pnpm test` | Vitest scoring-parity tests (against the Python skill output) |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm lint` | ESLint |
 
-## 环境变量
+## Environment variables
 
-见 [`.env.example`](./.env.example)。最小可跑只需 `GITHUB_TOKEN` + `LLM_API_KEY`（默认 StepFun 阶跃，OpenAI 兼容；可换任意 OpenAI 兼容服务）；缓存、限流、人机校验、排行榜在未配置时会**静默降级**（适合本地）。生产强烈建议全配齐。
+See [`.env.example`](./.env.example). The minimum to run is `GITHUB_TOKEN` + `LLM_API_KEY` (defaults to StepFun, OpenAI-compatible; swap in any OpenAI-compatible service). Cache, rate limiting, human verification, and the leaderboard **degrade silently** when unconfigured (fine for local). Configure everything for production.
 
-## 排行榜 + 百分位（Turso，可选）
+## Leaderboard + percentile (Turso, optional)
 
-配置 `TURSO_*` 后解锁「名人堂排行榜」(`/leaderboard`) 和结果页的「🏆 你超越了 X% 的开发者」。
-每次扫描把账号的最新分数 upsert 进库（一账号一行）；百分位 = 库里分数严格低于你的占比。
-**公开榜只收录 ≥70 分的高分账号**，低分号仍参与百分位统计但不被公开点名（防骚扰）。未配置时整套功能静默降级。
+Configure `TURSO_*` to unlock the "Hall of Fame" leaderboard (`/leaderboard`) and the result page's "🏆 You beat X% of developers".
+Each scan upserts the account's latest score into the DB (one row per account); percentile = the share of stored scores strictly below yours.
+**The public board only lists accounts scoring ≥70**; lower scores still count toward the percentile but are not publicly named (anti-harassment). The whole feature degrades silently when unconfigured.
 
 ```bash
-# 云端
+# cloud
 turso db create github-roast
-turso db tokens create github-roast   # 得到 TURSO_DATABASE_URL(libsql://...) + TURSO_AUTH_TOKEN
-# 本地开发免云
+turso db tokens create github-roast   # gives TURSO_DATABASE_URL(libsql://...) + TURSO_AUTH_TOKEN
+# local dev, no cloud
 TURSO_DATABASE_URL=file:./local.db
 ```
 
-## 部署到 Vercel
+## Deploy to Vercel
 
-1. Push 到 GitHub，在 Vercel 导入。
-2. 配置环境变量（同上）。`UPSTASH_*` 用 Vercel 的 Upstash 集成一键开通。
-3. Cloudflare Turnstile 拿一对 site/secret key，配 `NEXT_PUBLIC_TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY`。
-4. （可选）Turso：`TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` 开排行榜。
-5. Deploy。
+1. Push to GitHub, import in Vercel.
+2. Configure environment variables (as above). `UPSTASH_*` can be provisioned in one click via Vercel's Upstash integration.
+3. Grab a Cloudflare Turnstile site/secret key pair; set `NEXT_PUBLIC_TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY`.
+4. (Optional) Turso: `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` to enable the leaderboard.
+5. Deploy.
 
-## 成本（≈ $0 / 月）
+## Cost (≈ $0 / month)
 
-| 项 | 方案 | 成本 |
+| Item | Approach | Cost |
 |----|------|------|
-| 托管 / Serverless | Vercel | 免费额度内 |
-| GitHub API | 运营方 PAT（5000 req/h；瓶颈是 search 30/min） | $0 |
-| 大模型 | StepFun `step-3.7-flash`（flash 档很便宜，吃官方赠送额度）；额度耗尽转用户自带 Key | ~$0 |
-| 缓存 / 限流 | Upstash Redis 免费档 | $0 |
-| 人机校验 | Cloudflare Turnstile | $0 |
-| 排行榜 | Turso 免费档（~25M 写 / 10亿读 每月） | $0 |
+| Hosting / Serverless | Vercel | within free tier |
+| GitHub API | operator PAT (5000 req/h; bottleneck is search 30/min) | $0 |
+| LLM | StepFun `step-3.7-flash` (the flash tier is very cheap, runs on free credits); falls back to user's own key when credits run out | ~$0 |
+| Cache / rate limit | Upstash Redis free tier | $0 |
+| Human verification | Cloudflare Turnstile | $0 |
+| Leaderboard | Turso free tier (~25M writes / 1B reads per month) | $0 |
 
-三个杠杆把成本钉死：① 同账号 **24h 缓存**（少打 GitHub、少调模型，病毒传播时同名账号被反复扫）② **限流 + Turnstile** 挡脚本刷量 ③ **免费额度耗尽自动引导用户填自己的 Key**。
+Three levers pin the cost down: ① a **24h cache** per account (fewer GitHub calls and model calls — the same handle gets re-scanned a lot during viral spread) ② **rate limiting + Turnstile** to block scripted abuse ③ **automatic fallback to the user's own key** once free credits run out.
 
-## 自带模型 / API Key
+## Bring your own model / API key
 
-点页面上的「用自己的模型」，填 Base URL + API Key + Model。兼容任意 OpenAI 接口（OpenAI / OpenRouter / Groq / DeepSeek / 本地）。**Key 只存在你自己的浏览器 localStorage，调用时直传，绝不上传到服务器、绝不落库。**
+Click "Use your own model" on the page and enter Base URL + API Key + Model. Compatible with any OpenAI-style API (OpenAI / OpenRouter / Groq / DeepSeek / local). **The key lives only in your own browser's localStorage, is passed directly on call, and is never uploaded to the server or persisted.**
 
-## 重新生成打分一致性测试的基准
+## Regenerating the scoring-parity test baseline
 
-`src/lib/__tests__/score-fixtures.json` 是用 Python 技能的 `score()` 跑出来的 ground truth。技能公式更新后，用 `github-account-value/scripts/fetch_github_profile.py` 的 `score()` 对相同输入重跑并覆盖该文件，再 `pnpm test` 验证移植未走样。
+`src/lib/__tests__/score-fixtures.json` is the ground truth produced by the Python skill's `score()`. After the skill formula changes, re-run `score()` from `github-account-value/scripts/fetch_github_profile.py` on the same inputs, overwrite that file, then `pnpm test` to verify the port didn't drift.
 
-## 免责声明
+## Disclaimer
 
-本站仅基于 GitHub **公开数据**自动生成评分与点评，吐槽的是账号的公开行为与数据，非针对个人，不构成事实认定，请勿用于骚扰。私有贡献不计入，可能低估私有组织的活跃员工。
+This site generates scores and commentary automatically from **public GitHub data only**. It roasts an account's public behavior and data, is not directed at individuals, does not constitute a factual finding, and must not be used for harassment. Private contributions are excluded, so active members of private orgs may be underrated.
+
+## Sponsorship & fairness
+
+Sponsorship is welcome to cover running costs (GitHub API, LLM, hosting). Note that:
+
+- **Sponsorship does not affect any score or ranking.** Scores are computed deterministically by `src/lib/score.ts`; sponsors cannot buy a higher score, a better rank, or "whitewashing". Sponsor placements and leaderboard data are physically separated in the product.
+- Sponsor perks are attribution/placement only and never touch the scoring logic.
 
 ## License
 
-MIT
+Licensed under **[GNU AGPL-3.0](./LICENSE)**.
+
+- You may freely use, modify, and self-host this project.
+- **If you modify it and offer it as a network service** (SaaS / hosted), AGPL requires you to **release your modifications under AGPL as well** (users interacting over the network are entitled to the source).
+- The scoring core is ported from the open-source Claude skill `github-account-value`, kept as the single source of truth.
+
+> **Trademark:** the "GitHub Roast / 毒舌 GitHub 评分" name, logo, and domain are **not covered** by the open-source license; all rights reserved. You may self-host from this code, but please do not use the project's name/brand to impersonate the official site or cause confusion.
+>
+> Need it for a commercial scenario where publishing source is impractical (closed-source derivative / commercial license)? Get in touch.
