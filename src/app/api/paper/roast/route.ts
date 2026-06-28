@@ -201,9 +201,10 @@ export async function POST(req: NextRequest) {
     tldr_line,
   };
 
-  // Persist a freshly computed score so the shareable /arxiv/[id] page works for
-  // anyone (any model). An existing/locked score is already stored, so skip.
-  if (!lock) {
+  // Persist a freshly computed score (default model only — BYO-key roasts don't
+  // write to the board/share pages, so self-supplied keys can't pollute it). An
+  // existing/locked score is already stored, so skip.
+  if (!lock && isDefault) {
     await recordPaper({
       arxiv_id: paper.arxiv_id,
       title: paper.title,
@@ -241,8 +242,9 @@ export async function POST(req: NextRequest) {
           full += chunk;
           push(encoder.encode(chunk));
         }
-        // Persist the commentary so the detail page / share link has it.
-        if (full.trim()) {
+        // Persist the commentary (default model only) so the detail page / share
+        // link has it. BYO-key output isn't stored.
+        if (isDefault && full.trim()) {
           await updatePaperRoast(paper.arxiv_id, mode, lang, full);
         }
       } catch (e) {
