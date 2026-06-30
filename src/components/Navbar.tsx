@@ -6,6 +6,7 @@ import { NavAuth } from "./NavAuth";
 import { MobileMenu } from "./MobileMenu";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { ThemeToggle } from "./ThemeToggle";
+import { BrandMark } from "./BrandMark";
 
 /**
  * Site-wide navigation bar. Server component that composes client islands
@@ -43,9 +44,10 @@ export async function Navbar() {
         {/* Brand */}
         <Link
           href="/"
-          className="shrink-0 text-base font-black tracking-tight text-zinc-100 transition-colors hover:text-white"
+          className="group flex shrink-0 items-center gap-2 text-base font-black tracking-tight text-zinc-100 transition-colors hover:text-white"
         >
-          <span className="text-orange-500">🔥</span> {tNav("brand")}
+          <BrandMark className="size-6 transition-transform group-hover:rotate-3" />
+          <span>{tNav("brand")}</span>
         </Link>
 
         {/* Desktop primary nav */}
