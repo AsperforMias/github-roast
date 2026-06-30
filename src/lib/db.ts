@@ -37,7 +37,15 @@ import {
 import type { Lang } from "./lang";
 import type { PaperDims, PaperMode, PaperTierKey } from "./paper-types";
 import { rankSimilar } from "./similarity";
-import type { RoastLine, ScanResult, SubScores, Tags, Tier } from "./types";
+import type {
+  ImpactRepo,
+  RoastLine,
+  ScanResult,
+  SubScores,
+  Tags,
+  Tier,
+  TopRepo,
+} from "./types";
 
 const EMPTY_TAGS: Tags = { zh: [], en: [] };
 const HEAT_LOOKUP_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -510,6 +518,72 @@ export async function hasProfileSnapshot(username: string): Promise<boolean> {
   } catch (e) {
     console.error("hasProfileSnapshot failed:", e);
     return false;
+  }
+}
+
+/** Parsed view of the latest profile snapshot, for the detail page's evidence
+ * blocks (contributions, featured work, stack, orgs). Read-only/slow path —
+ * decoupled from the lean `getAccountDetail` hot read. */
+export interface ProfileSnapshotView {
+  top_repos: TopRepo[];
+  impact_repos: ImpactRepo[];
+  pinned_repos: string[];
+  organizations: string[];
+  bio: string | null;
+  company: string | null;
+  scanned_at: number;
+}
+
+function parseJsonArray<T>(raw: unknown): T[] {
+  if (typeof raw !== "string" || !raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? (v as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Latest sedimented profile snapshot for an account, or null if none exists
+ * (low-score/old accounts never backfilled). Fire-and-forget tolerant. */
+export async function getProfileSnapshot(
+  username: string,
+): Promise<ProfileSnapshotView | null> {
+  const db = getClient();
+  if (!db) return null;
+  try {
+    await ensureSchema(db);
+    const res = await db.execute({
+      sql: `SELECT top_repos, impact_repos, pinned_repos, organizations, metrics, scanned_at
+            FROM profile_snapshots
+            WHERE username = ?
+            ORDER BY scanned_at DESC
+            LIMIT 1`,
+      args: [username.toLowerCase()],
+    });
+    const r = res.rows[0];
+    if (!r) return null;
+    let bio: string | null = null;
+    let company: string | null = null;
+    try {
+      const m = JSON.parse((r.metrics as string) || "{}");
+      bio = typeof m.bio === "string" && m.bio ? m.bio : null;
+      company = typeof m.company === "string" && m.company ? m.company : null;
+    } catch {
+      // leave bio/company null
+    }
+    return {
+      top_repos: parseJsonArray<TopRepo>(r.top_repos),
+      impact_repos: parseJsonArray<ImpactRepo>(r.impact_repos),
+      pinned_repos: parseJsonArray<string>(r.pinned_repos),
+      organizations: parseJsonArray<string>(r.organizations),
+      bio,
+      company,
+      scanned_at: Number(r.scanned_at),
+    };
+  } catch (e) {
+    console.error("getProfileSnapshot failed:", e);
+    return null;
   }
 }
 
