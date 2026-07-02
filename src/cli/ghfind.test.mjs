@@ -181,4 +181,40 @@ describe("ghfind CLI", () => {
       expect.objectContaining({ headers: expect.objectContaining({ "user-agent": "ghfind-cli" }) }),
     );
   });
+
+  it("dry-runs binary self-update with release asset metadata", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse({
+        tag_name: "v99.0.0",
+        html_url: "https://example.test/releases/v99.0.0",
+        assets: [{ name: "custom", browser_download_url: "https://example.test/download/ghfind" }],
+      }),
+    );
+
+    await run([
+      "update",
+      "install",
+      "--release-url",
+      "https://example.test/latest",
+      "--asset-url",
+      "https://example.test/download/ghfind",
+      "--dry-run",
+      "-o",
+      "json",
+    ]);
+
+    const body = JSON.parse(stdout);
+    expect(body.method).toBe("binary");
+    expect(body.status).toBe("dry_run");
+    expect(body.asset_url).toBe("https://example.test/download/ghfind");
+  });
+
+  it("dry-runs npm package manager update", async () => {
+    await run(["update", "npm", "--dry-run", "-o", "json"]);
+
+    const body = JSON.parse(stdout);
+    expect(body.method).toBe("npm");
+    expect(body.status).toBe("dry_run");
+    expect(body.command).toEqual(["npm", "install", "-g", "ghfind@latest"]);
+  });
 });

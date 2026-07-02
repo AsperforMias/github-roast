@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { chmodSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { arch, platform } from "node:os";
+import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { DEFAULT_HOST, DEFAULT_RELEASE_URL, commandCatalog, findCommand } from "./catalog.mjs";
 import {
   CliHttpError,
@@ -83,6 +86,22 @@ function parseArgs(argv) {
     }
     if (arg === "--release-url") {
       flags.releaseUrl = argv[++i];
+      continue;
+    }
+    if (arg === "--method") {
+      flags.method = argv[++i];
+      continue;
+    }
+    if (arg === "--target") {
+      flags.target = argv[++i];
+      continue;
+    }
+    if (arg === "--asset-url") {
+      flags.assetUrl = argv[++i];
+      continue;
+    }
+    if (arg === "--dry-run") {
+      flags.dryRun = true;
       continue;
     }
     positional.push(arg);
@@ -293,6 +312,129 @@ async function checkUpdate(flags) {
   };
 }
 
+function releaseAssetName() {
+  const goos = platform() === "win32" ? "windows" : platform();
+  const goarch = arch() === "x64" ? "amd64" : arch();
+  return `ghfind-${goos}-${goarch}${goos === "windows" ? ".exe" : ""}`;
+}
+
+function selectReleaseAsset(release, assetUrl) {
+  if (assetUrl) return { name: "custom", url: assetUrl };
+  const want = releaseAssetName();
+  const asset = (release.assets ?? []).find((item) => item.name === want && item.browser_download_url);
+  if (!asset) fail(`Release ${release.tag_name} does not contain asset ${want}`);
+  return { name: asset.name, url: asset.browser_download_url };
+}
+
+async function fetchLatestRelease(flags) {
+  const releaseUrl = flags.releaseUrl ?? process.env.GHFIND_RELEASE_URL ?? DEFAULT_RELEASE_URL;
+  const response = await fetch(releaseUrl, {
+    headers: {
+      accept: "application/vnd.github+json",
+      "user-agent": "ghfind-cli",
+    },
+  });
+  if (!response.ok) throw new CliHttpError(`API request failed with HTTP ${response.status}`, { status: response.status });
+  return { release: await response.json(), checkedUrl: releaseUrl };
+}
+
+async function installBinaryUpdate(flags) {
+  if (platform() === "win32") {
+    fail("Binary self-update is not supported on Windows; use --method npm, pip, or brew.");
+  }
+  const { release, checkedUrl } = await fetchLatestRelease(flags);
+  const asset = selectReleaseAsset(release, flags.assetUrl);
+  const target = resolve(flags.target ?? process.argv[1]);
+  const comparison = isNewerVersion(release.tag_name, CURRENT_VERSION);
+  let status = "current";
+  let message = "ghfind is already up to date.";
+  if (CURRENT_VERSION === "dev" || !comparison.comparable) {
+    status = "installable";
+    message = "Current version is not comparable; installing the latest release asset is allowed.";
+  } else if (comparison.newer) {
+    status = "update_available";
+    message = "A newer ghfind CLI release is available.";
+  }
+  const result = {
+    name: "ghfind",
+    current_version: CURRENT_VERSION,
+    latest_version: release.tag_name,
+    update_available: comparison.newer && comparison.comparable,
+    method: "binary",
+    target_path: target,
+    asset_name: asset.name,
+    asset_url: asset.url,
+    release_url: release.html_url ?? "",
+    checked_url: checkedUrl,
+    status,
+    message,
+    ...(flags.dryRun ? { dry_run: true } : {}),
+  };
+  if (flags.dryRun) {
+    result.status = "dry_run";
+    result.message = "Dry run only; no files were changed.";
+    return result;
+  }
+  if (status === "current") return result;
+
+  const download = await fetch(asset.url, { headers: { "user-agent": "ghfind-cli" } });
+  if (!download.ok) {
+    throw new CliHttpError(`API request failed with HTTP ${download.status}`, { status: download.status });
+  }
+  const mode = statSync(target).mode;
+  const tmp = `${target}.new`;
+  const backup = `${target}.old`;
+  writeFileSync(tmp, Buffer.from(await download.arrayBuffer()), { mode });
+  chmodSync(tmp, mode);
+  rmSync(backup, { force: true });
+  renameSync(target, backup);
+  try {
+    renameSync(tmp, target);
+  } catch (error) {
+    renameSync(backup, target);
+    rmSync(tmp, { force: true });
+    throw error;
+  }
+  rmSync(backup, { force: true });
+  result.status = "updated";
+  result.message = "ghfind binary was updated.";
+  return result;
+}
+
+function packageManagerCommand(method) {
+  if (method === "npm") return ["npm", "install", "-g", "ghfind@latest"];
+  if (method === "pip") return ["python3", "-m", "pip", "install", "--upgrade", "ghfind"];
+  if (method === "brew") return ["brew", "upgrade", "ghfind"];
+  fail(`Invalid update method: ${method}`);
+}
+
+function installPackageManagerUpdate(method, flags) {
+  const command = packageManagerCommand(method);
+  const result = {
+    name: "ghfind",
+    current_version: CURRENT_VERSION,
+    method,
+    command,
+    status: flags.dryRun ? "dry_run" : "ready",
+    message: flags.dryRun ? "Dry run only; command was not executed." : "Package manager upgrade is ready.",
+    ...(flags.dryRun ? { dry_run: true } : {}),
+  };
+  if (flags.dryRun) return result;
+  const child = spawnSync(command[0], command.slice(1), { encoding: "utf8" });
+  if (child.status !== 0) {
+    fail(`${method} failed: ${(child.stderr || child.stdout || "").trim()}`);
+  }
+  result.status = "updated";
+  result.message = "Package manager upgrade completed.";
+  return result;
+}
+
+async function installUpdate(method, flags) {
+  const resolvedMethod = method || flags.method || "binary";
+  if (resolvedMethod === "binary") return installBinaryUpdate(flags);
+  return installPackageManagerUpdate(resolvedMethod, flags);
+}
+
 function printUpdateInfo(info, mode) {
   if (mode === "json") return printJson(info);
   print(`ghfind current: ${info.current_version}`);
@@ -300,6 +442,18 @@ function printUpdateInfo(info, mode) {
   print(`status: ${info.status}`);
   print(info.message);
   if (info.release_url) print(`release: ${info.release_url}`);
+}
+
+function printUpdateInstallResult(result, mode) {
+  if (mode === "json") return printJson(result);
+  print(`ghfind update method: ${result.method}`);
+  print(`current: ${result.current_version}`);
+  if (result.latest_version) print(`latest: ${result.latest_version}`);
+  print(`status: ${result.status}`);
+  print(result.message);
+  if (result.target_path) print(`target: ${result.target_path}`);
+  if (result.asset_url) print(`asset: ${result.asset_url}`);
+  if (result.command?.length) print(`command: ${result.command.join(" ")}`);
 }
 
 function printHelp() {
@@ -331,6 +485,14 @@ export async function run(argv = process.argv.slice(2)) {
     if (command === "update" && positional[1] === "check") {
       const info = await checkUpdate(flags);
       return printUpdateInfo(info, outputMode(flags));
+    }
+    if (command === "update" && positional[1] === "install") {
+      const result = await installUpdate(null, flags);
+      return printUpdateInstallResult(result, outputMode(flags));
+    }
+    if (command === "update" && ["npm", "pip", "brew"].includes(positional[1])) {
+      const result = await installUpdate(positional[1], flags);
+      return printUpdateInstallResult(result, outputMode(flags));
     }
 
     if (command === "stats") {
