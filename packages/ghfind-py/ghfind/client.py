@@ -74,7 +74,7 @@ class GhFind:
         github_token: Optional[str] = None,
         transport: Optional[Transport] = None,
     ) -> None:
-        raw = (host or os.environ.get("GITHUB_ROAST_HOST") or DEFAULT_HOST).strip()
+        raw = (host or os.environ.get("GHFIND_HOST") or os.environ.get("GITHUB_ROAST_HOST") or DEFAULT_HOST).strip()
         self.host = raw.rstrip("/")
         self._api_key = api_key
         self._turnstile_token = turnstile_token

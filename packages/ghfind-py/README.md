@@ -94,7 +94,7 @@ Same numbers either way.
 ## Options & errors
 
 ```python
-gh = GhFind(host="https://ghfind.com", api_key="...")  # or GITHUB_ROAST_HOST env var
+gh = GhFind(host="https://ghfind.com", api_key="...")  # or GHFIND_HOST env var
 
 from ghfind import GhFindError
 try:

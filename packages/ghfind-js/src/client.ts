@@ -34,8 +34,8 @@ export type FetchLike = (
 }>;
 
 export interface GhFindOptions {
-  /** Base URL of the ghfind deployment. Defaults to `GITHUB_ROAST_HOST` env var,
-   * then `https://ghfind.com`. */
+  /** Base URL of the ghfind deployment. Defaults to `GHFIND_HOST`, then the
+   * legacy `GITHUB_ROAST_HOST` env var, then `https://ghfind.com`. */
   host?: string;
   /** Machine API key sent as `Authorization: Bearer <key>` (bypasses Turnstile on
    * POST /api/scan in production). */
@@ -101,6 +101,7 @@ export class GhFind {
   constructor(options: GhFindOptions = {}) {
     const raw = (
       options.host ||
+      (typeof process !== "undefined" ? process.env?.GHFIND_HOST : undefined) ||
       (typeof process !== "undefined" ? process.env?.GITHUB_ROAST_HOST : undefined) ||
       DEFAULT_HOST
     ).trim();
