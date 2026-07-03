@@ -101,7 +101,7 @@ you). Same numbers either way.
 
 ```ts
 const gh = new GhFind({
-  host: "https://ghfind.com",   // or GITHUB_ROAST_HOST env var
+  host: "https://ghfind.com",   // or GHFIND_HOST env var
   apiKey: process.env.GHFIND_API_KEY, // sent as Authorization: Bearer <key>
 });
 ```
