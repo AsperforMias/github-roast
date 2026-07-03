@@ -16,11 +16,11 @@ import {
   getUserMatchups,
 } from "@/lib/db";
 import {
+  beginStaleScoreRefresh,
   coalesceScan,
   deleteCachedScan,
+  finishStaleScoreRefresh,
   getCachedScan,
-  hasStaleScoreRefreshCooldown,
-  markStaleScoreRefreshCooldown,
 } from "@/lib/redis";
 import { buildScanResult } from "@/lib/scan-core";
 import { recordDeterministicScan } from "@/lib/score-persist";
@@ -70,22 +70,25 @@ const getStaleDetail = cache((username: string) =>
 );
 // Dedupe the cached-scan read (pending-profile fallback) across the same pair.
 const getLiveScan = cache((username: string) => getCachedScan(username));
-const refreshStaleDetail = cache(async (username: string) => {
-  if (await hasStaleScoreRefreshCooldown(username)) return null;
+async function requestIp(): Promise<string> {
+  const h = await headers();
+  const fwd = h.get("x-forwarded-for");
+  return fwd?.split(",")[0]?.trim() || h.get("x-real-ip") || "0.0.0.0";
+}
 
+const refreshStaleDetail = cache(async (username: string, ip: string) => {
+  const guard = await beginStaleScoreRefresh(username, ip);
+  if (!guard.allowed) return null;
   try {
     const scan = await coalesceScan(username, () => buildScanResult(username));
     await recordDeterministicScan(scan);
     await deleteCachedScan(scan.metrics.username);
-    const detail = await getAccountDetail(scan.metrics.username);
-    if (!detail) {
-      await markStaleScoreRefreshCooldown(scan.metrics.username);
-    }
-    return detail;
+    return getAccountDetail(scan.metrics.username);
   } catch (e) {
     console.error("stale score refresh failed:", e);
-    await markStaleScoreRefreshCooldown(username);
     return null;
+  } finally {
+    await finishStaleScoreRefresh(username);
   }
 });
 
@@ -182,7 +185,7 @@ export default async function AccountPage({
     if (!scan && !roasting) {
       const stale = await getStaleDetail(decoded);
       if (!stale) notFound();
-      d = await refreshStaleDetail(stale.username);
+      d = await refreshStaleDetail(stale.username, await requestIp());
       if (!d) {
         d = stale;
         staleFallback = true;
