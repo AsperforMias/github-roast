@@ -11,11 +11,30 @@
     "brand": "ghfind",
     "roast": "Roast",
     "leaderboard": "Leaderboard",
-    "developers": "Discover",
+    "discover": "Discover",
+    "developers": "Developers",
+    "projects": "Projects",
+    "languages": "Languages",
+    "organizations": "Organizations",
     "versus": "Versus",
     "blog": "Research",
     "openMenu": "Open menu",
     "closeMenu": "Close menu"
+  },
+  "globalSearch": {
+    "open": "Open global search",
+    "trigger": "Search",
+    "title": "Search ghfind",
+    "description": "Find developers, projects, languages, and organizations.",
+    "input": "Search developers and projects",
+    "placeholder": "Try antfu, vite, Rust, or vercel",
+    "loading": "Searching…",
+    "empty": "No matching developers or projects yet.",
+    "group": {
+      "users": "Developers",
+      "repos": "Projects",
+      "facets": "Languages & organizations"
+    }
   },
   "header": {
     "signIn": "Sign in with GitHub",

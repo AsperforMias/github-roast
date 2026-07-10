@@ -11,11 +11,30 @@
     "brand": "ghfind",
     "roast": "锐评",
     "leaderboard": "榜单",
-    "developers": "发现",
+    "discover": "发现",
+    "developers": "开发者",
+    "projects": "项目",
+    "languages": "语言",
+    "organizations": "组织",
     "versus": "对战",
     "blog": "研究",
     "openMenu": "打开菜单",
     "closeMenu": "关闭菜单"
+  },
+  "globalSearch": {
+    "open": "打开全局搜索",
+    "trigger": "搜索",
+    "title": "搜索 ghfind",
+    "description": "查找开发者、项目、语言和组织。",
+    "input": "搜索开发者和项目",
+    "placeholder": "试试 antfu、vite、Rust 或 vercel",
+    "loading": "搜索中…",
+    "empty": "暂时没有匹配的开发者或项目。",
+    "group": {
+      "users": "开发者",
+      "repos": "项目",
+      "facets": "语言与组织"
+    }
   },
   "header": {
     "signIn": "用 GitHub 登录",

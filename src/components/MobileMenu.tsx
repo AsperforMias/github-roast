@@ -11,6 +11,7 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { NavLinks } from "./NavLinks";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { ThemeToggle } from "./ThemeToggle";
+import { GlobalSearch } from "./GlobalSearch";
 
 /**
  * Mobile hamburger + drawer (sm:hidden). Owns the open/close state.
@@ -93,6 +94,7 @@ export function MobileMenu({
           className="top-14 rounded-b-lg border-b border-white/10 bg-popover/98 px-4 pb-5 pt-4 backdrop-blur-xl"
         >
           <div className="space-y-4">
+            <GlobalSearch mobile />
             <NavLinks items={NAV_ITEMS} orientation="vertical" onNavigate={close} />
 
             <div className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03]">

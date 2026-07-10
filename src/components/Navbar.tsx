@@ -6,6 +6,7 @@ import { NavLinks } from "./NavLinks";
 import { NavAuth } from "./NavAuth";
 import { MobileMenu } from "./MobileMenu";
 import { BrandMark } from "./BrandMark";
+import { GlobalSearch } from "./GlobalSearch";
 
 /**
  * Site-wide top bar. Keep the public-site feel: plain brand on the left, normal
@@ -33,6 +34,9 @@ export async function Navbar() {
         </div>
 
         <div className="ml-auto flex items-center justify-end gap-2">
+          <div className="hidden md:block">
+            <GlobalSearch />
+          </div>
           <div className="hidden items-center gap-2 sm:flex md:gap-1.5">
             <NavAuth
               configured={oauthConfigured}
