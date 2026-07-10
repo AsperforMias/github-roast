@@ -627,6 +627,7 @@ export async function clearCachedLeaderboards(): Promise<void> {
 // in-process single-flight (lib/developers.ts), the DB query runs at most once
 // per key per TTL even under a burst.
 const FACET_TTL_SECONDS = 600; // 10 min
+const PROJECT_DISCOVERY_TTL_SECONDS = 600;
 
 // Bucket values are canonical (e.g. "Rust", "C++") and safe in a Redis key.
 const facetCategoriesKey = (type: FacetType) => `facets:cat:${type}`;
@@ -681,6 +682,28 @@ export async function setCachedFacetDevelopers(
     await r.set(facetListKey(type, value), entries, { ex: FACET_TTL_SECONDS });
   } catch {
     // best-effort
+  }
+}
+
+/** Generic JSON cache used by the project-discovery service. Keys include their
+ * own namespace and normalized filters; values are always public read models. */
+export async function getCachedProjectValue<T>(key: string): Promise<T | null> {
+  const r = getRedis();
+  if (!r) return null;
+  try {
+    return (await r.get<T>(key)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setCachedProjectValue<T>(key: string, value: T): Promise<void> {
+  const r = getRedis();
+  if (!r) return;
+  try {
+    await r.set(key, value, { ex: PROJECT_DISCOVERY_TTL_SECONDS });
+  } catch {
+    // best-effort cache
   }
 }
 
