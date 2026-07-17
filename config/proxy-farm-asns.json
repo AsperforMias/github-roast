@@ -1,0 +1,31 @@
+{
+  "ruleName": "ghfind-deny-known-proxy-farm-asns",
+  "description": "Deny high-confidence rotating-proxy and scraper-farm networks observed against ghfind. Deliberately excludes general cloud, VPN, and consumer networks that can carry legitimate users.",
+  "asns": [
+    "212238",
+    "9009",
+    "3257",
+    "203020",
+    "210906",
+    "62874",
+    "7979",
+    "396356",
+    "46635",
+    "11798",
+    "396319",
+    "59253",
+    "55286",
+    "401152",
+    "212286",
+    "134450",
+    "132817",
+    "209709",
+    "201341",
+    "393886"
+  ],
+  "excludedNetworks": [
+    "AWS and other general-purpose cloud providers",
+    "consumer VPN and accelerator networks",
+    "residential ISP networks"
+  ]
+}

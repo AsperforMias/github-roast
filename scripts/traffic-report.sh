@@ -11,12 +11,14 @@
 set -euo pipefail
 
 SINCE="${1:-24h}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ASN_DENYLIST="$SCRIPT_DIR/../config/proxy-farm-asns.json"
 
 # 高置信代理/爬虫农场 ASN(2026-07 实测:Oxylabs、Datacamp、M247 等,真人几乎不会从这些网络来)
 # 2026-07-06 增补:农场开始伪造 referrer=www.google.com,借伪造流量暴露了一批新 ASN —
 #   401152/11798 Ace Data Centers、212286 LonConnect、134450 HostRoyale二号段、
 #   132817 DZCRD、209709 code200、201341 trafficforce、393886 Leaseweb、210906 Bite(代理转售段)
-PROXY_ASNS='["212238","9009","3257","203020","210906","62874","7979","396356","46635","11798","396319","59253","55286","401152","212286","134450","132817","209709","201341","393886"]'
+PROXY_ASNS="$(jq -c '.asns' "$ASN_DENYLIST")"
 # 注意:机场/VPN 出口(Eons 138997、DMIT、Akari、Bunny、GSL 等)有真实中国用户,刻意不算进农场层。
 AWS_ASNS='["14618","16509"]'
 

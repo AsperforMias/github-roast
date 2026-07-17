@@ -9,6 +9,7 @@
     "cli:build": "make cli-build",
     "cli:build-all": "make cli-build-all",
     "cli:test": "make cli-test",
+    "waf:sync": "tsx scripts/sync-waf-asn-denylist.mts",
     "start": "next build && next start",
     "start:prod": "next start",
     "build/start": "next build && next start",
