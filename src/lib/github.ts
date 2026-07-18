@@ -16,6 +16,7 @@ import type {
   RepoReadme,
   TopRepo,
 } from "./types";
+import type { PublicScanOwnedRepoFact, PublicScanPrFact } from "./scan-run-types";
 
 const GITHUB_API = "https://api.github.com";
 const README_FETCH_LIMIT = 1024 * 1024;
@@ -226,6 +227,209 @@ async function restGet<T>(path: string): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+export interface DurableOwnedRepositoryPage {
+  facts: PublicScanOwnedRepoFact[];
+  hasNextPage: boolean;
+}
+
+/**
+ * REST owns the user's public repository inventory and is cursor-like through
+ * page numbers. The quick scan intentionally reads only two pages; durable
+ * jobs continue until an empty/short page so project quality cannot silently
+ * depend on repository count.
+ */
+export async function fetchDurableOwnedRepositoryPage(input: {
+  username: string;
+  page: number;
+}): Promise<DurableOwnedRepositoryPage> {
+  const page = Math.max(1, Math.floor(input.page));
+  const repos = await restGet<RestRepo[]>(
+    `users/${encodeURIComponent(input.username)}/repos?per_page=100&sort=pushed&page=${page}`,
+  );
+  if (repos === null) {
+    throw new GitHubDataUnavailableError("GitHub repository inventory is unavailable.");
+  }
+  return {
+    facts: repos
+      .filter((repo) => !repo.fork)
+      .map((repo) => {
+        const owner = repo.owner?.login ?? repo.full_name?.split("/", 1)[0] ?? input.username;
+        return {
+          repoKey: repo.full_name ?? `${owner}/${repo.name}`,
+          name: repo.name,
+          ownerLogin: owner,
+          stars: repo.stargazers_count ?? 0,
+          forks: repo.forks_count ?? 0,
+          openIssues: repo.open_issues_count ?? 0,
+          size: repo.size ?? 0,
+          language: repo.language ?? null,
+          description: repo.description ?? null,
+          pushedAt: repo.pushed_at ?? null,
+          topics: repo.topics ?? [],
+        };
+      }),
+    hasNextPage: repos.length === 100,
+  };
+}
+
+export interface PublicCommitSearchPage {
+  totalCount: number;
+  incompleteResults: boolean;
+  candidates: {
+    sha: string;
+    repoKey: string;
+    ownerLogin: string | null;
+    stars: number;
+    isPrivate: boolean;
+    isFork: boolean;
+    authoredAt: string | null;
+  }[];
+}
+
+interface RestCommitSearchResponse {
+  total_count?: number;
+  incomplete_results?: boolean;
+  items?: {
+    sha?: string | null;
+    repository?: {
+      full_name?: string | null;
+      stargazers_count?: number | null;
+      private?: boolean | null;
+      fork?: boolean | null;
+      owner?: { login?: string | null } | null;
+    } | null;
+    commit?: { author?: { date?: string | null } | null } | null;
+  }[];
+}
+
+/**
+ * Search only discovers candidate public commits. Callers must follow it with
+ * {@link listPublicDefaultBranchCommits} before treating a result as impact.
+ */
+export async function searchPublicCommitCandidates(input: {
+  username: string;
+  from: string;
+  to: string;
+  page?: number;
+  perPage?: number;
+}): Promise<PublicCommitSearchPage> {
+  const page = Math.max(1, input.page ?? 1);
+  const perPage = Math.max(1, Math.min(input.perPage ?? 100, 100));
+  const query = `author:${input.username} author-date:${input.from}..${input.to}`;
+  let res: Response;
+  try {
+    res = await ghFetch(
+      `${GITHUB_API}/search/commits?${new URLSearchParams({
+        q: query,
+        page: String(page),
+        per_page: String(perPage),
+      }).toString()}`,
+      {
+        headers: {
+          Accept: "application/vnd.github+json",
+        },
+      },
+    );
+  } catch {
+    throw new GitHubDataUnavailableError("GitHub commit search failed.");
+  }
+  if (res.status === 403 || res.status === 429) throw new GitHubRateLimitError();
+  if (!res.ok) {
+    throw new GitHubDataUnavailableError(`GitHub commit search HTTP ${res.status}.`);
+  }
+  let data: RestCommitSearchResponse;
+  try {
+    data = (await res.json()) as RestCommitSearchResponse;
+  } catch {
+    throw new GitHubDataUnavailableError("GitHub commit search returned invalid JSON.");
+  }
+  return {
+    totalCount: Math.max(0, Number(data.total_count) || 0),
+    incompleteResults: Boolean(data.incomplete_results),
+    candidates: (data.items ?? [])
+      .map((item) => {
+        const repo = item.repository?.full_name?.trim();
+        const sha = item.sha?.trim();
+        if (!repo || !sha) return null;
+        return {
+          sha,
+          repoKey: repo,
+          ownerLogin: item.repository?.owner?.login ?? null,
+          stars: Math.max(0, Number(item.repository?.stargazers_count) || 0),
+          isPrivate: Boolean(item.repository?.private),
+          isFork: Boolean(item.repository?.fork),
+          authoredAt: item.commit?.author?.date ?? null,
+        };
+      })
+      .filter(
+        (candidate): candidate is PublicCommitSearchPage["candidates"][number] => candidate !== null,
+      ),
+  };
+}
+
+export interface PublicDefaultBranchCommitPage {
+  commits: { sha: string; committedAt: string | null }[];
+  hasNextPage: boolean;
+}
+
+interface RestDefaultBranchCommit {
+  sha?: string | null;
+  commit?: { committer?: { date?: string | null } | null } | null;
+}
+
+/**
+ * The REST list-commits endpoint starts from the repository default branch when
+ * `sha` is omitted. This is the verification step that makes discovered commit
+ * candidates eligible for ecosystem-impact aggregation.
+ */
+export async function listPublicDefaultBranchCommits(input: {
+  repoKey: string;
+  username: string;
+  from: string;
+  to: string;
+  page: number;
+}): Promise<PublicDefaultBranchCommitPage> {
+  const [owner, repo] = input.repoKey.split("/", 2);
+  if (!owner || !repo) {
+    throw new GitHubDataUnavailableError("Invalid repository key for commit verification.");
+  }
+  const params = new URLSearchParams({
+    author: input.username,
+    since: input.from,
+    until: input.to,
+    page: String(Math.max(1, input.page)),
+    per_page: "100",
+  });
+  let res: Response;
+  try {
+    res = await ghFetch(
+      `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits?${params.toString()}`,
+    );
+  } catch {
+    throw new GitHubDataUnavailableError("GitHub default-branch commit lookup failed.");
+  }
+  if (res.status === 403 || res.status === 429) throw new GitHubRateLimitError();
+  if (!res.ok) {
+    throw new GitHubDataUnavailableError(`GitHub default-branch commits HTTP ${res.status}.`);
+  }
+  let data: RestDefaultBranchCommit[];
+  try {
+    data = (await res.json()) as RestDefaultBranchCommit[];
+  } catch {
+    throw new GitHubDataUnavailableError("GitHub default-branch commits returned invalid JSON.");
+  }
+  const hasNextPage = /<[^>]+>;\s*rel="next"/i.test(res.headers.get("link") ?? "");
+  return {
+    commits: (data ?? [])
+      .map((commit) => {
+        const sha = commit.sha?.trim();
+        return sha ? { sha, committedAt: commit.commit?.committer?.date ?? null } : null;
+      })
+      .filter((commit): commit is { sha: string; committedAt: string | null } => commit !== null),
+    hasNextPage,
+  };
 }
 
 async function graphql<T>(
@@ -716,6 +920,28 @@ async function fetchRepoLanguages(
     .sort((a, b) => b.size - a.size);
 }
 
+/** Hydrate bounded README/language evidence after a durable repo inventory. */
+export async function hydrateTopRepoEvidence(
+  repos: TopRepo[],
+  fallbackOwner: string,
+  limit = 12,
+): Promise<TopRepo[]> {
+  const selected = repos.slice(0, Math.max(0, limit));
+  await Promise.all(
+    selected.map(async (repo) => {
+      const owner = repo.owner_login ?? fallbackOwner;
+      const [readme, languages] = await Promise.all([
+        fetchReadmeDocument(owner, repo.name),
+        fetchRepoLanguages(owner, repo.name),
+      ]);
+      repo.readme = readme ?? undefined;
+      repo.readme_excerpt = readme?.features.prompt_summary ?? null;
+      repo.languages = languages;
+    }),
+  );
+  return repos;
+}
+
 async function fetchRepoDetails(owner: string, repo: string): Promise<RestRepo | null> {
   return restGet<RestRepo>(`repos/${owner}/${repo}`).catch(() => null);
 }
@@ -881,6 +1107,109 @@ interface PrNode {
   files?: { nodes: { path: string | null }[] | null } | null;
 }
 
+type DurablePrState = "MERGED" | "CLOSED";
+
+interface DurablePrPageNode {
+  id: string;
+  title: string | null;
+  createdAt: string | null;
+  mergedAt: string | null;
+  closedAt: string | null;
+  additions: number | null;
+  deletions: number | null;
+  changedFiles: number | null;
+  labels?: { nodes: ({ name: string | null } | null)[] } | null;
+  repository: {
+    nameWithOwner: string;
+    stargazerCount: number;
+    isPrivate: boolean;
+    isFork: boolean;
+    owner: { login: string } | null;
+  } | null;
+}
+
+export interface DurablePullRequestPage {
+  facts: PublicScanPrFact[];
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+/**
+ * Fetch one deliberately small, cursor-addressable page for durable scan jobs.
+ * This is separate from the UI's recent-PR sample: its records are persisted and
+ * eventually form the all-history native merge / workflow landing aggregate.
+ */
+export async function fetchDurablePullRequestPage(input: {
+  username: string;
+  state: DurablePrState;
+  after?: string | null;
+  includeLabels?: boolean;
+  first?: number;
+}): Promise<DurablePullRequestPage> {
+  const count = Math.max(1, Math.min(input.first ?? (input.includeLabels ? 50 : 100), 100));
+  const data = await graphql<{
+    user: {
+      pullRequests: {
+        nodes: DurablePrPageNode[];
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      };
+    } | null;
+  }>(
+    `query($login: String!, $state: PullRequestState!, $after: String, $count: Int!, $includeLabels: Boolean!) {
+      user(login: $login) {
+        pullRequests(first: $count, states: [$state], after: $after,
+                     orderBy: {field: CREATED_AT, direction: DESC}) {
+          nodes {
+            id title createdAt mergedAt closedAt additions deletions changedFiles
+            labels(first: 20) @include(if: $includeLabels) { nodes { name } }
+            repository {
+              nameWithOwner stargazerCount isPrivate isFork owner { login }
+            }
+          }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }`,
+    {
+      login: input.username,
+      state: input.state,
+      after: input.after ?? null,
+      count,
+      includeLabels: Boolean(input.includeLabels),
+    },
+  );
+  const pullRequests = data.user?.pullRequests;
+  if (!pullRequests) {
+    throw new GitHubDataUnavailableError("GitHub GraphQL returned no durable pull request page.");
+  }
+  return {
+    facts: (pullRequests.nodes ?? []).map((node) => {
+      const repo = node.repository;
+      return {
+        pullRequestId: node.id,
+        source: input.state === "MERGED" ? "native_merged" : "closed",
+        repoKey: repo?.nameWithOwner ?? null,
+        ownerLogin: repo?.owner?.login ?? null,
+        stars: repo?.stargazerCount ?? 0,
+        isPrivate: Boolean(repo?.isPrivate),
+        isFork: Boolean(repo?.isFork),
+        createdAt: node.createdAt ?? null,
+        mergedAt: node.mergedAt ?? null,
+        closedAt: node.closedAt ?? null,
+        title: node.title ?? null,
+        additions: node.additions ?? null,
+        deletions: node.deletions ?? null,
+        changedFiles: node.changedFiles ?? null,
+        labels: (node.labels?.nodes ?? [])
+          .map((label) => label?.name?.trim())
+          .filter((label): label is string => Boolean(label)),
+      };
+    }),
+    hasNextPage: pullRequests.pageInfo.hasNextPage,
+    endCursor: pullRequests.pageInfo.endCursor,
+  };
+}
+
 async function fetchRecentPrs(username: string, count = 50): Promise<RecentPr[]> {
   const data = await graphql<{
     user: { pullRequests: { nodes: PrNode[] } } | null;
@@ -922,11 +1251,224 @@ interface AnyPr {
 }
 
 interface ClosedPrNode {
+  id?: string | null;
   author: { login: string } | null;
   repository: { owner: { login: string } | null } | null;
   timelineItems: {
     nodes: ({ actor: { login: string } | null } | null)[];
   } | null;
+}
+
+interface WorkflowTimelineActor {
+  login: string | null;
+  __typename: string;
+}
+
+interface WorkflowLandedPrNode {
+  __typename: "PullRequest";
+  id: string;
+  mergedAt: string | null;
+  additions: number | null;
+  deletions: number | null;
+  changedFiles: number | null;
+  repository: {
+    nameWithOwner: string;
+    stargazerCount: number;
+    isPrivate: boolean;
+    isFork: boolean;
+    owner: { login: string } | null;
+  } | null;
+  timelineItems: {
+    nodes: ({
+      __typename: "LabeledEvent";
+      createdAt: string;
+      actor: WorkflowTimelineActor | null;
+      label: { name: string } | null;
+    } | {
+      __typename: "ClosedEvent";
+      createdAt: string;
+      actor: WorkflowTimelineActor | null;
+    } | null)[];
+  } | null;
+}
+
+export interface WorkflowLandedPr {
+  id: string;
+  repo: string;
+  stars: number;
+  owner_login: string;
+}
+
+/**
+ * A few large projects merge through an official bot, then close the GitHub PR
+ * instead of setting `mergedAt`. Do not generalize from the label alone: the
+ * same official merge bot must apply the exact Merged label and close the PR in
+ * that order. GitHub represents some repository bots (for example
+ * `pytorchmergebot`) as User rather than Bot, so a narrow merge/land-bot login
+ * pattern is accepted in addition to the Bot actor type.
+ */
+export function isWorkflowLandedPr(node: WorkflowLandedPrNode): boolean {
+  if (node.mergedAt || !node.repository || node.repository.isPrivate || node.repository.isFork) {
+    return false;
+  }
+
+  const events = node.timelineItems?.nodes ?? [];
+  const mergedEvents = events.filter(
+    (event): event is Extract<NonNullable<typeof event>, { __typename: "LabeledEvent" }> =>
+      event?.__typename === "LabeledEvent" && event.label?.name.trim().toLowerCase() === "merged",
+  );
+  return mergedEvents.some((merged) => {
+    const bot = merged.actor;
+    if (!isOfficialMergeBotActor(bot)) return false;
+    const botLogin = bot.login.toLowerCase();
+    return events.some(
+      (event) =>
+        event?.__typename === "ClosedEvent" &&
+        event.createdAt >= merged.createdAt &&
+        event.actor?.login?.toLowerCase() === botLogin &&
+        isOfficialMergeBotActor(event.actor),
+    );
+  });
+}
+
+function isOfficialMergeBotActor(actor: WorkflowTimelineActor | null): actor is WorkflowTimelineActor & { login: string } {
+  return Boolean(
+    actor?.login &&
+      (actor.__typename === "Bot" || /(?:merge|land)[-_]?bot$/i.test(actor.login)),
+  );
+}
+
+/**
+ * Verify candidate closed PR ids from the durable label crawl. A `Merged` label
+ * alone is deliberately insufficient: the same official bot must apply it and
+ * later close the PR. The returned facts replace the candidate's `closed`
+ * source, while native merges remain a separate source.
+ */
+export async function verifyWorkflowLandedPublicScanFacts(
+  ids: string[],
+): Promise<PublicScanPrFact[]> {
+  const unique = [...new Set(ids)].filter(Boolean).slice(0, 25);
+  if (unique.length === 0) return [];
+  const data = await graphql<{
+    nodes: (WorkflowLandedPrNode | { __typename: string } | null)[];
+  }>(
+    `query($ids: [ID!]!) {
+      nodes(ids: $ids) {
+        ... on PullRequest {
+          __typename id title createdAt closedAt mergedAt additions deletions changedFiles
+          repository { nameWithOwner stargazerCount isPrivate isFork owner { login } }
+          timelineItems(last: 20, itemTypes: [LABELED_EVENT, CLOSED_EVENT]) {
+            nodes {
+              __typename
+              ... on LabeledEvent { createdAt actor { login __typename } label { name } }
+              ... on ClosedEvent { createdAt actor { login __typename } }
+            }
+          }
+        }
+      }
+    }`,
+    { ids: unique },
+  );
+  return data.nodes
+    .filter((node): node is WorkflowLandedPrNode & {
+      title?: string | null;
+      createdAt?: string | null;
+      closedAt?: string | null;
+    } => node?.__typename === "PullRequest")
+    .filter(isWorkflowLandedPr)
+    .map((node) => ({
+      pullRequestId: node.id,
+      source: "workflow_landed" as const,
+      repoKey: node.repository!.nameWithOwner,
+      ownerLogin: node.repository!.owner?.login ?? null,
+      stars: node.repository!.stargazerCount ?? 0,
+      isPrivate: node.repository!.isPrivate,
+      isFork: node.repository!.isFork,
+      createdAt: node.createdAt ?? null,
+      mergedAt: node.mergedAt ?? null,
+      closedAt: node.closedAt ?? null,
+      title: node.title ?? null,
+      additions: node.additions ?? null,
+      deletions: node.deletions ?? null,
+      changedFiles: node.changedFiles ?? null,
+      labels: ["Merged"],
+    }));
+}
+
+async function fetchWorkflowLandedPrs(
+  username: string,
+  closedPrCount: number,
+): Promise<WorkflowLandedPr[]> {
+  if (closedPrCount === 0) return [];
+  try {
+    // Keep labels out of collect()'s already dense contribution query. A 100 ×
+    // 20 nested label selection can exceed GitHub's GraphQL resource budget for
+    // active accounts, making the *baseline* score unavailable. This optional
+    // side query may fail closed without changing native merge behavior.
+    const candidates = await graphql<{
+      user: {
+        pullRequests: {
+          nodes: ({
+            id: string;
+            labels: { nodes: ({ name: string | null } | null)[] } | null;
+          } | null)[];
+        } | null;
+      } | null;
+    }>(
+      `query($login: String!) {
+        user(login: $login) {
+          pullRequests(first: 100, states: CLOSED, orderBy: {field: CREATED_AT, direction: DESC}) {
+            nodes { id labels(first: 20) { nodes { name } } }
+          }
+        }
+      }`,
+      { login: username },
+    );
+    const ids = (candidates.user?.pullRequests?.nodes ?? [])
+      .filter((node): node is { id: string; labels: { nodes: ({ name: string | null } | null)[] } | null } => node !== null)
+      .filter((node) =>
+        (node.labels?.nodes ?? []).some(
+          (label) => label?.name?.trim().toLowerCase() === "merged",
+        ),
+      )
+      .map((node) => node.id)
+      .slice(0, 25);
+    if (ids.length === 0) return [];
+
+    const data = await graphql<{
+      nodes: (WorkflowLandedPrNode | { __typename: string } | null)[];
+    }>(
+      `query($ids: [ID!]!) {
+        nodes(ids: $ids) {
+          ... on PullRequest {
+            __typename id mergedAt additions deletions changedFiles
+            repository { nameWithOwner stargazerCount isPrivate isFork owner { login } }
+            timelineItems(last: 20, itemTypes: [LABELED_EVENT, CLOSED_EVENT]) {
+              nodes {
+                __typename
+                ... on LabeledEvent { createdAt actor { login __typename } label { name } }
+                ... on ClosedEvent { createdAt actor { login __typename } }
+              }
+            }
+          }
+        }
+      }`,
+      { ids },
+    );
+    return data.nodes
+      .filter((node): node is WorkflowLandedPrNode => node?.__typename === "PullRequest")
+      .filter(isWorkflowLandedPr)
+      .map((node) => ({
+        id: node.id,
+        repo: node.repository!.nameWithOwner,
+        stars: node.repository!.stargazerCount,
+        owner_login: node.repository!.owner?.login ?? node.repository!.nameWithOwner.split("/", 1)[0],
+      }));
+  } catch {
+    // This is an optional enrichment. Preserve the established native-merge
+    // scan when GitHub declines timeline access or a transient error occurs.
+    return [];
+  }
 }
 
 export interface ClosedPrBreakdown {
@@ -941,6 +1483,7 @@ export function computeClosedPrBreakdown(
   nodes: ClosedPrNode[],
   total: number,
   loginLower: string,
+  workflowLandedIds: ReadonlySet<string> = new Set(),
 ): ClosedPrBreakdown {
   let maintainerClosed = 0;
   let selfClosedExternal = 0;
@@ -948,6 +1491,7 @@ export function computeClosedPrBreakdown(
   let unknownClosed = Math.max(0, total - nodes.length);
 
   for (const node of nodes) {
+    if (node.id && workflowLandedIds.has(node.id)) continue;
     const author = (node.author?.login ?? loginLower).toLowerCase();
     const repoOwner = node.repository?.owner?.login?.toLowerCase() ?? "";
     const actor = node.timelineItems?.nodes?.[0]?.actor?.login?.toLowerCase() ?? "";
@@ -964,7 +1508,7 @@ export function computeClosedPrBreakdown(
   }
 
   return {
-    closed_unmerged_pr_count: total,
+    closed_unmerged_pr_count: Math.max(0, total - workflowLandedIds.size),
     maintainer_closed_unmerged_pr_count: maintainerClosed,
     self_closed_external_pr_count: selfClosedExternal,
     self_closed_own_repo_pr_count: selfClosedOwnRepo,
@@ -1152,11 +1696,18 @@ export function computeImpactQualitySignals(
   recentPrs: RecentPr[],
   impactPrCount: number,
   loginLower: string,
+  workflowLandedImpactPrCount = 0,
 ): ImpactQualitySignals {
   const verifiedImpactPrs = recentPrs.filter((p) => isEcosystemImpactPr(p, loginLower));
   const docLikeCount = verifiedImpactPrs.filter(isDocLikeImpactPr).length;
   const coreCount = verifiedImpactPrs.length - docLikeCount;
-  const unverifiedCount = Math.max(0, impactPrCount - verifiedImpactPrs.length);
+  // Bot-verified workflow landings are valid impact facts, but lack the
+  // file-level sample needed to classify them as core/doc-like. Keep them out
+  // of the "unverified" bucket without inventing a code-quality label.
+  const unverifiedCount = Math.max(
+    0,
+    impactPrCount - verifiedImpactPrs.length - workflowLandedImpactPrCount,
+  );
 
   let impactQualityCap: number | undefined;
   if (impactPrCount >= 10 && coreCount <= 2 && docLikeCount > coreCount) {
@@ -1175,9 +1726,10 @@ export function computeImpactQualitySignals(
 }
 
 /** One repo's all-time contribution aggregate, keyed by `nameWithOwner`.
- * `commits` comes from the contribution graph; `prs` must come from merged PRs
- * only. GitHub's PR contribution graph can include opened-but-unmerged PRs, so
- * it is not safe as a landed-impact source. */
+ * `commits` comes from the contribution graph; `prs` come from GitHub-native
+ * merges plus separately verified repository-workflow landings. GitHub's PR
+ * contribution graph can include opened-but-unmerged PRs, so it is not safe as
+ * a landed-impact source. */
 export interface ContribRepoAgg {
   repo: string;
   stars: number;
@@ -1692,6 +2244,7 @@ const CONTRIB_OVERVIEW_FIELDS = `pinnedItems(first: 6, types: REPOSITORY) {
         closedPRs: pullRequests(states: CLOSED, first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {
           totalCount
           nodes {
+            id
             author { login }
             repository { owner { login } }
             timelineItems(last: 1, itemTypes: CLOSED_EVENT) {
@@ -1840,21 +2393,49 @@ export async function collect(username: string): Promise<{
   const pinnedRepos = (overview.pinnedItems?.nodes ?? [])
     .map((n) => n?.nameWithOwner)
     .filter((s): s is string => typeof s === "string");
-  const [commitContribRepos, mergedPrContribRepos] = await Promise.all([
+  const closedPrNodes = overview.closedPRs?.nodes ?? [];
+  const mergedPrCount = overview.mergedPRs?.totalCount ?? 0;
+  // The quick collector intentionally caps merged-PR aggregation at 300.
+  // For larger histories, publish neither a partial impact aggregate nor a
+  // score: the durable paginator owns the complete result.
+  let mergedPrContribRepos: ContribRepoAgg[] = [];
+  let mergedPrContributionAggregationIncomplete = mergedPrCount > 300;
+  const [commitContribRepos, workflowLandedPrs] = await Promise.all([
     fetchCommitContribReposByYear(login, contributionYears),
-    fetchMergedPrContribRepos(login),
+    fetchWorkflowLandedPrs(login, overview.closedPRs?.totalCount ?? 0),
   ]);
+  if (!mergedPrContributionAggregationIncomplete) {
+    try {
+      mergedPrContribRepos = await fetchMergedPrContribRepos(login);
+    } catch (error) {
+      if (!(error instanceof GitHubResourceLimitError)) throw error;
+      mergedPrContributionAggregationIncomplete = true;
+    }
+  }
+  const commitContributionAggregationUnavailable =
+    contributionYears.length > 0 && commitContribRepos === null;
+  const workflowLandedContribRepos: ContribRepoAgg[] = workflowLandedPrs.map((pr) => ({
+    repo: pr.repo,
+    stars: pr.stars,
+    is_private: false,
+    is_fork: false,
+    owner_login: pr.owner_login,
+    commits: 0,
+    prs: 1,
+    active_years: 0,
+  }));
   const contribRepos = mergeContribRepoAggs([
     commitContribRepos ?? [],
     mergedPrContribRepos,
+    workflowLandedContribRepos,
   ]);
   const organizations = await fetchOrganizations(login);
-  const mergedPrCount = overview.mergedPRs?.totalCount ?? 0;
   const totalPrCount = overview.allPRs?.totalCount ?? 0;
   const closedPrBreakdown = computeClosedPrBreakdown(
-    overview.closedPRs?.nodes ?? [],
+    closedPrNodes,
     overview.closedPRs?.totalCount ?? 0,
     loginLower,
+    new Set(workflowLandedPrs.map((pr) => pr.id)),
   );
   const issuesCreated = overview.issues?.totalCount ?? 0;
   const decidedPrCount = mergedPrCount + closedPrBreakdown.maintainer_closed_unmerged_pr_count;
@@ -1969,13 +2550,19 @@ export async function collect(username: string): Promise<{
   // popular repos — others' projects (≥200★) or the user's own genuinely popular
   // repos (≥1000★). Computed from all-time per-repo contribution aggregates so
   // old high-value work (e.g. apache/flink commits) still counts. PR impact is
-  // sourced from states: MERGED only; contribution-graph PR entries are not
-  // treated as landed work because closed/unmerged PRs can appear there.
+  // sourced from states: MERGED plus the narrowly verified official-workflow
+  // path above; contribution-graph PR entries are never treated as landed work
+  // because closed/unmerged PRs can appear there.
   let impact = computeImpactFromContribMap(contribRepos, loginLower);
+  const workflowLandedImpactPrCount = workflowLandedPrs.filter((pr) => {
+    const isExternal = pr.owner_login.toLowerCase() !== loginLower;
+    return pr.stars >= (isExternal ? 200 : 1000);
+  }).length;
   const impactQuality = computeImpactQualitySignals(
     recentPrWindow,
     impact.impact_pr_count,
     loginLower,
+    workflowLandedImpactPrCount,
   );
   const verifiedImpactPrs = recentPrWindow
     .filter((p) => isEcosystemImpactPr(p, loginLower))
@@ -2032,6 +2619,7 @@ export async function collect(username: string): Promise<{
     top_starred_original_repo_quality_score: topStarredOriginalQuality.score,
     top_starred_original_repo_quality_repo: topStarredOriginalQuality.repo,
     merged_pr_count: mergedPrCount,
+    workflow_landed_pr_count: workflowLandedPrs.length,
     total_pr_count: totalPrCount,
     issues_created: issuesCreated,
     last_year_contributions: lastYearContributions,
@@ -2051,6 +2639,7 @@ export async function collect(username: string): Promise<{
     recent_external_doc_like_pr_ratio: externalDocLikePrRatio,
     max_impact_repo_stars: maxImpactRepoStars,
     impact_pr_count: impact.impact_pr_count,
+    workflow_landed_impact_pr_count: workflowLandedImpactPrCount,
     impact_depth_raw: impactDepthRaw,
     impact_quality_cap: impact.impact_quality_cap,
     verified_impact_pr_count: impact.verified_impact_pr_count,
@@ -2059,6 +2648,8 @@ export async function collect(username: string): Promise<{
     unverified_impact_pr_count: impact.unverified_impact_pr_count,
     impact_repo_count: impact.impact_repo_count,
     impact_commit_count: impact.impact_commit_count,
+    commit_contribution_aggregation_unavailable: commitContributionAggregationUnavailable,
+    merged_pr_contribution_aggregation_incomplete: mergedPrContributionAggregationIncomplete,
     external_trivial_pr_count: externalTrivialPrCount,
     star_inflation_suspect: starInflationSuspect,
     closed_unmerged_pr_count: closedPrBreakdown.closed_unmerged_pr_count,

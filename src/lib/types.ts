@@ -113,6 +113,9 @@ export interface RawMetrics {
   top_starred_original_repo_quality_score?: number;
   top_starred_original_repo_quality_repo?: string | null;
   merged_pr_count: number;
+  /** Closed PRs that a repository-owned merge bot explicitly marked as landed.
+   * This is intentionally separate from GitHub-native `merged_pr_count`. */
+  workflow_landed_pr_count?: number;
   total_pr_count: number;
   issues_created: number;
   last_year_contributions: number;
@@ -129,6 +132,9 @@ export interface RawMetrics {
   external_trivial_pr_count: number;
   max_impact_repo_stars: number;
   impact_pr_count: number;
+  /** Subset of impact PRs credited through a repository workflow rather than
+   * GitHub's native merged state. */
+  workflow_landed_impact_pr_count?: number;
   impact_depth_raw: number;
   impact_quality_cap?: number;
   verified_impact_pr_count?: number;
@@ -139,6 +145,13 @@ export interface RawMetrics {
   // Optional so existing RawMetrics literals / fixtures stay valid.
   impact_repo_count?: number;
   impact_commit_count?: number;
+  /** GitHub rejected the per-repository commit contribution graph for this
+   * account, so impact uses native merged PRs but cannot credit commit-only work. */
+  commit_contribution_aggregation_unavailable?: boolean;
+  /** The quick collector deliberately omitted its bounded native merged-PR
+   * aggregate. A durable paginated scan is required before this account can be
+   * scored or written about as complete public history. */
+  merged_pr_contribution_aggregation_incomplete?: boolean;
   star_inflation_suspect: boolean;
   // Spam / low-quality PR signals.
   closed_unmerged_pr_count: number;
