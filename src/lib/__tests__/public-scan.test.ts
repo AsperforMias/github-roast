@@ -100,6 +100,7 @@ describe("durable public scan admission", () => {
 
   it("only diverts bounded-coverage cases", () => {
     expect(requiresDurablePublicScan(scan())).toBe(false);
+    expect(requiresDurablePublicScan(scan({ merged_pr_count: 51, recent_merged_pr_sample: 50 }))).toBe(true);
     expect(requiresDurablePublicScan(scan({ merged_pr_count: 301 }))).toBe(true);
     expect(requiresDurablePublicScan(scan({ total_pr_count: 601 }))).toBe(true);
     expect(requiresDurablePublicScan(scan({ public_repos: 5, fetched_repo_count: 2 }))).toBe(true);
@@ -119,6 +120,7 @@ describe("durable public scan admission", () => {
     await expect(resolvePublicScanFromTrustedQuickScan("durable-case", quick)).resolves.toMatchObject({
       status: "pending",
       run: { id: "run-id" },
+      shouldDrain: true,
     });
     expect(mocks.seedPublicScanQuickResult).toHaveBeenCalledWith(
       expect.objectContaining({ jobId: "job-id", runId: "run-id" }),
@@ -205,5 +207,19 @@ describe("durable public scan admission", () => {
 
     await expect(startPublicScan("durable-case")).resolves.toMatchObject({ status: "pending" });
     expect(mocks.seedPublicScanQuickResult).not.toHaveBeenCalled();
+  });
+
+  it("marks an existing durable job as passive so status readers cannot advance it", async () => {
+    const run = pendingRun();
+    mocks.enqueuePublicScan.mockResolvedValue({
+      run,
+      job: { id: "job-id" },
+      created: false,
+    });
+
+    await expect(startPublicScan("durable-case")).resolves.toMatchObject({
+      status: "pending",
+      shouldDrain: false,
+    });
   });
 });

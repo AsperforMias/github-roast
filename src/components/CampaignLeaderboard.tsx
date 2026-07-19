@@ -22,6 +22,7 @@ export async function CampaignLeaderboard({
     getCampaignLeaderboard(campaign),
     getTranslations({ locale, namespace: "tiers" }),
   ]);
+
   const tagLocale = normLang(locale);
 
   if (entries.length === 0) {
