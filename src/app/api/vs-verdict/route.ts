@@ -38,8 +38,7 @@ function canonicalize(a: string, b: string): { a: string; b: string } | null {
 /**
  * Generate (or return the cached) bilingual LLM PK verdict + self-improvement
  * advice for a matchup. Auto-fired by the /vs page on mount, so crawlers that
- * run JS reach it too — BotID gates them before anything is written or spent
- * (mirrors /api/roast: verified crawlers pass, headless farms are refused).
+ * run JS reach it too — BotID gates them before anything is written or spent.
  * Guardrails: both sides must clear VS_MIN_SCORE, per-IP rate limit,
  * single-flight lock, and a ~5-day cache — so one pair costs at most one LLM
  * call per window. The matchup row + view count are written only after the bot

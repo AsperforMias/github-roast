@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { checkBotId } from "botid/server";
 import { TIER_LABEL_EN } from "@/lib/badge";
 import { machineAuth } from "@/lib/machine-auth";
 import {
@@ -613,13 +612,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "missing_scan" }, { status: 400 });
   }
 
-  // Human/agent gate, before any cache or LLM work — but ONLY for the paths that
-  // spend the operator's LLM credit. Anonymous agents keep two open lanes: byoKey
-  // (their own model, their own bill) and the Bearer key. Verified
-  // crawlers/assistants (googlebot, chatgpt-user, claude…) pass as agents;
-  // browsers must pass BotID's invisible human check. Only the impersonator
-  // remainder — headless farms on rotating proxies — is refused, and the refusal
-  // advertises the documented agent surface instead.
+  // Invalid machine credentials still fail closed. Interactive browser roasts
+  // are protected by the request and generation rate limits below; a heuristic
+  // bot classifier must not gate this primary user-facing flow.
   const auth = machineAuth(req);
   if (auth === "invalid") {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -673,22 +668,6 @@ export async function POST(req: NextRequest) {
   }
   const { config, isDefault } = resolved;
 
-  // The gate keys on the RESOLVED config, not on whether a byoKey field was
-  // sent: an empty/partial byoKey (e.g. `byoKey: {}`) falls back to the
-  // default config in resolveConfig, so checking `body.byoKey` here would let
-  // it skip BotID and burn the operator's credit anyway.
-  if (auth === "absent" && isDefault) {
-    const verification = await checkBotId();
-    if (verification.isBot && !verification.isVerifiedBot) {
-      return NextResponse.json(
-        {
-          error: "bot_detected",
-          hint: "Automated clients are welcome: use the documented API and MCP server at https://ghfind.com/docs (free, no headless browser required).",
-        },
-        { status: 403 },
-      );
-    }
-  }
   // Default path fails over to the operator's fallback provider (DeepSeek) when
   // the primary drops/queues the connection before any answer text. BYO keys
   // never fail over — the user supplied a single key and pays their own way.
