@@ -5,7 +5,6 @@ import type { ScanResult } from "@/lib/types";
 const mocks = vi.hoisted(() => ({
   acquireRoastLock: vi.fn(),
   buildRoastMessages: vi.fn(),
-  checkBotId: vi.fn(),
   checkRoastRateLimit: vi.fn(),
   checkRoastRequestRateLimit: vi.fn(),
   chat: vi.fn(),
@@ -26,7 +25,6 @@ const mocks = vi.hoisted(() => ({
   waitForCachedRoast: vi.fn(),
 }));
 
-vi.mock("botid/server", () => ({ checkBotId: mocks.checkBotId }));
 vi.mock("@/lib/db", () => ({
   getArchivedRoast: mocks.getArchivedRoast,
   getCanonicalScoreWriteIdentity: mocks.getCanonicalScoreWriteIdentity,
@@ -68,7 +66,6 @@ const scan = {
 
 describe("POST /api/roast quick score contract", () => {
   beforeEach(() => {
-    mocks.checkBotId.mockResolvedValue({ isBot: false, isVerifiedBot: false });
     mocks.checkRoastRequestRateLimit.mockResolvedValue({ success: true });
     mocks.checkRoastRateLimit.mockResolvedValue({ success: true });
     mocks.rateLimitHeaders.mockReturnValue({});
@@ -100,6 +97,19 @@ describe("POST /api/roast quick score contract", () => {
     await new Response(response.body).text();
     expect(mocks.getCanonicalScoreWriteIdentity).toHaveBeenCalledWith("DemoDev", expect.stringMatching(/^[a-f0-9]{64}$/));
     expect(mocks.updateRoast).toHaveBeenCalled();
+  });
+
+  it("accepts an interactive roast without a BotID availability gate", async () => {
+    const response = await POST(new NextRequest("https://example.test/api/roast", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scan, lang: "zh" }),
+    }));
+
+    expect(response.status).toBe(200);
+    await new Response(response.body).text();
+    expect(mocks.checkRoastRequestRateLimit).toHaveBeenCalled();
+    expect(mocks.checkRoastRateLimit).toHaveBeenCalled();
   });
 
   it("uses the exact server quick snapshot instead of a client handoff", async () => {

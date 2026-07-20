@@ -19,15 +19,12 @@ const GA_MEASUREMENT_ID =
   process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID ?? "G-GHXRYBFZEN";
 
 /**
- * Routes whose fetches get a BotID signature attached client-side, so the server
- * can invisibly tell humans from headless farms via checkBotId(). Only the
- * credit-spending LLM routes need this — /api/scan keeps its Turnstile gate, and
- * agents skip BotID entirely by authenticating with a Bearer key (or by being a
- * verified bot). vs-verdict is here because the /vs page auto-fires it on mount,
- * which any JS-running crawler would otherwise trigger.
+ * The verdict route gets a BotID signature because /vs auto-fires it on mount,
+ * which any JS-running crawler could otherwise trigger. Interactive roasts rely
+ * on scan Turnstile plus server-side request and generation rate limits instead:
+ * BotID classifications are not reliable enough to gate the primary user flow.
  */
 const BOTID_PROTECTED_ROUTES = [
-  { path: "/api/roast", method: "POST" as const },
   { path: "/api/vs-verdict", method: "POST" as const },
 ];
 
