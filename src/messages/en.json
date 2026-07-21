@@ -443,6 +443,7 @@
     "ctaJudge": "Judge",
     "ctaPk": "Fight",
     "ctaDiscover": "Rankings",
+    "ctaBusy": "Judging…",
     "groupDirect": "Direct",
     "groupPk": "Duel",
     "groupUser": "User",

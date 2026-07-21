@@ -387,9 +387,20 @@ export function Omnibox({
           type="button"
           onClick={() => !busy && activateIntent(intent)}
           disabled={busy}
-          className={`shrink-0 whitespace-nowrap bg-orange-600 text-white hover:bg-orange-500 ${stackCtaOnMobile ? "basis-full sm:basis-auto" : ""}`}
+          aria-busy={busy}
+          className={`shrink-0 whitespace-nowrap bg-orange-600 text-white hover:bg-orange-500 disabled:cursor-wait disabled:opacity-100 ${stackCtaOnMobile ? "basis-full sm:basis-auto" : ""}`}
         >
-          {ctaLabel}
+          {busy ? (
+            <>
+              <span
+                aria-hidden
+                className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white"
+              />
+              {t("ctaBusy")}
+            </>
+          ) : (
+            ctaLabel
+          )}
         </Button>
       </div>
 
